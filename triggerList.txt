@@ -1,3 +1,14 @@
+##in ntuples
+HLT_Photon20_v
+HLT_Mu55_v3
+HLT_Mu12_v3
+HLT_IsoMu27_v16
+HLT_IsoMu20_v15
+HLT_Ele35_WPTight_Gsf_v9
+HLT_Ele27_WPTight_Gsf_v16
+
+
+##available in MINIAOD
 HLT_Mu15_IsoVVVL_PFHT450_v15
 HLT_Mu50_IsoVVVL_PFHT450_v15
 HLT_Mu15_IsoVVVL_PFHT600_v19
