@@ -2,6 +2,8 @@
 #include <TChain.h>
 #include <TEfficiency.h>
 #include <TFile.h>
+#include <ROOT/RDataFrame.hxx>
+#include <ROOT/RResultPtr.hxx>
 #include <TH1D.h>
 #include <map>
 #include <algorithm>
@@ -9,7 +11,9 @@
 #include <string>
 #include <cstdio>
 #include <memory>
+#include <sstream>
 #include <string>
+#include <utility>
 #include <vector>
 
 using std::cout;
@@ -17,6 +21,7 @@ using std::endl;
 using std::string;
 using std::vector;
 using std::map;
+using std::pair;
 namespace fs = std::filesystem;
 
 
@@ -59,95 +64,87 @@ std::vector<std::string> getEOSFiles(const std::string& eosPath)
 // Configuration
 // ------------------------------------------------------------
 
-const int NBINS = 25;
+const int NBINS = 30;
 const double MET_MIN = 0.0;
-const double MET_MAX = 250.;
+const double MET_MAX = 300.;
 
-// ------------------------------------------------------------
-// Main
-// ------------------------------------------------------------
-
-TEfficiency* makeTriggerEfficiency(TChain* chain, string triggername, string htbin, string teff_name)
-{
-    if (!chain) {
-        std::cerr << "ERROR: Null TChain!" << std::endl;
-        return nullptr;
-    }
-
-    // --------------------------------------------------------
-    // Set up branches
-    // --------------------------------------------------------
-
-    float MET;
-    vector<float>* jetpt = nullptr;
-    bool trigger;
-
-    chain->SetBranchAddress("Met_CPt", &MET); //corrected met
-    chain->SetBranchAddress("Jet_pt", &jetpt);
-    chain->SetBranchAddress(triggername.c_str(), &trigger);
-   
-   
-    float hthi = std::stof(string(htbin.substr(htbin.find("_")+1)));
-    float htlo = std::stof(string(htbin.substr(0,htbin.find("_"))));
-
-
-    // --------------------------------------------------------
-    // Create TEfficiency
-    // --------------------------------------------------------
-
-    TEfficiency* eff = new TEfficiency(
-        teff_name.c_str(),
-        "Trigger Efficiency;MET [GeV];Efficiency",
-        NBINS,
-        MET_MIN,
-        MET_MAX
-    );
-
-    // Optional: choose how the uncertainty intervals are calculated
-    eff->SetStatisticOption(TEfficiency::kFCP);
-
-    // --------------------------------------------------------
-    // Loop over events
-    // --------------------------------------------------------
-
-    Long64_t nEntries = chain->GetEntries();
-
-    std::cout << "Processing " << nEntries << " events..." << std::endl;
-
-    for (Long64_t i = 0; i < nEntries; ++i) {
-
-        chain->GetEntry(i);
-
-        // ----------------------------------------------------
-        // Denominator selection
-        // ----------------------------------------------------
-
-        // Put your denominator/preselection here.
-        //
-        // Example:
-        //
-        // if (MET < 50)
-        //     continue;
-        //HT calculation placeholder until can run on skims
-        double ht = 0;
-        for(int j = 0; j < (int)jetpt->size(); j++){
-		ht += jetpt->at(j);
+string makeTriggerCutstring(const vector<string>& trigs){
+	string trigsel;
+	for(int t = 0; t < (int)trigs.size(); t++){
+	    trigsel += trigs[t] + " || ";
 	}
-	if(ht < htlo || ht >= hthi)
-		continue;
+	trigsel = trigsel.substr(0,trigsel.size()-4);
+	trigsel = "("+trigsel+")";
+	return trigsel;
+}
 
-        bool denominator = true;
+string makeHTBinCutstring(const string& htbin){
+    std::size_t underscore = htbin.find('_');
 
-        if (!denominator)
-            continue;
+    if (underscore == std::string::npos)
+        return "";
 
-        // ----------------------------------------------------
-        // Fill efficiency
-        // ----------------------------------------------------
-        eff->Fill(trigger, MET);
-    }
+    std::string lower = htbin.substr(0, underscore);
+    std::string upper = htbin.substr(underscore + 1);
 
-    return eff;
+    if (!lower.empty() && !upper.empty())
+        return "((ht > " + lower + ") && (ht < " + upper + "))";
+
+    if (!lower.empty())
+        return "(ht > " + lower + ")";
+
+    if (!upper.empty())
+        return "(ht < " + upper + ")";
+
+    return "";
+}
+
+void makeTriggerEfficiency(TChain* chain, const vector<string>& triggers, const vector<string>& preseltriggers, vector<string> htbins, string year, vector<TEfficiency*>& effs)
+{
+	if (!chain) {
+	    std::cerr << "ERROR: Null TChain!" << std::endl;
+	    return;
+	}
+	//do rdataframe hists for tefficiency - add ht binning here!
+	string trigsel = makeTriggerCutstring(triggers);
+	string trigpresel = makeTriggerCutstring(preseltriggers);
+
+	string evtfilters = "((Flag_BadChargedCandidateFilter) && (Flag_BadPFMuonFilter) && (Flag_EcalDeadCellTriggerPrimitiveFilter) && (Flag_HBHENoiseFilter) && (Flag_HBHENoiseIsoFilter) && (Flag_ecalBadCalibFilter) && (Flag_eeBadScFilter) && (Flag_goodVertices))";//"(Flag_MetFilters == 1)"; //need pts cut when running over skims
+
+
+	ROOT::RDataFrame df(*chain);
+	auto df0 = df.Define("ht","ROOT::VecOps::Sum(Jet_pt)");
+
+	map<string,pair<ROOT::RDF::RResultPtr<TH1D>, ROOT::RDF::RResultPtr<TH1D>>> dfhists;
+	for(auto htbin : htbins){
+		string htcutstring = makeHTBinCutstring(htbin); 
+		auto df_htbin = df0.Filter(htcutstring);
+		//total hist (denom)
+		TH1D htotal_model("hTotal","PFMETOR_Efficiency;MET [GeV];Efficiency",NBINS,MET_MIN,MET_MAX);
+		TH1D hpass_model("hPass","PFMETOR_Efficiency;MET [GeV];Efficiency",NBINS,MET_MIN,MET_MAX);
+		string presel = trigpresel+" && "+evtfilters + " && "+htcutstring; //in addition to ntuple "filter" of (>= 1 SV || >= 1 photon[pt > 30]) && MET > 100
+		
+		auto hTotal = df0.Filter(presel).Histo1D(htotal_model,"Met_CPt");	
+		//pass hist (num)
+		auto hPass = df0.Filter(presel+" && "+trigsel).Histo1D(hpass_model,"Met_CPt");
+
+		dfhists[htbin] = std::make_pair(hTotal, hPass);
+	}
+	df0.Report()->Print();
+	for(auto it = dfhists.begin(); it != dfhists.end(); it++){
+		string htbin = it->first;
+		TEfficiency* eff = new TEfficiency(*(it->second.second),*(it->second.first));
+		cout << "htbin " << htbin << endl;
+		cout << "Passed:   " << eff->GetPassedHistogram()->GetEntries() << endl;
+		cout << "Total:    " << eff->GetTotalHistogram()->GetEntries() << endl;
+		if(eff->GetTotalHistogram()->GetEntries() == 0) cout << "Empty eff " << year << endl;
+		if(eff == nullptr) continue;
+
+		// Optional: choose how the uncertainty intervals are calculated
+		eff->SetStatisticOption(TEfficiency::kFCP);
+		eff->SetName(("PFMETOR_Efficiency_"+year+"_HTBin"+htbin).c_str());
+		effs.push_back(eff);
+	}
 
 }
 
@@ -167,13 +164,15 @@ int main(){
 
 	std::string path =
 	    "/store/user/lpcsusylep/jaking/KUCMSNtuple/";
-	vector<string> years = {"18","24"};
-	string trigger = "HLT_Ele35_WPTight_Gsf_v9";
-	string htbin = "500_700";
+	vector<string> preseltriggers = {"HLT_Ele35_WPTight_Gsf_v9","HLT_Photon20_v","HLT_Mu55_v3","HLT_Mu12_v3","HLT_IsoMu27_v16","HLT_IsoMu20_v15","HLT_Ele27_WPTight_Gsf_v16"};
+	vector<string> triggers = {"HLT_PFMET120_PFMHT120_IDTight_v","HLT_PFMET120_PFMHT120_IDTight_PFHT60_v","HLT_PFMETNoMu120_PFMHTNoMu120_IDTight_v","HLT_PFMETNoMu120_PFMHTNoMu120_IDTight_PFHT60_v"};
+	vector<string> htbins = {"_500","500_700","700_1000","1000_"};
 	vector<TEfficiency*> effcurves;
-	for(auto year : years){
+	for(auto it = filedirs.begin(); it != filedirs.end(); it++){
+		string year = it->first;
+		cout << "Doing year " << year << endl;
 		TChain* chain = new TChain("tree/llpgtree");
-		vector<string> ntupledirs = filedirs[year];
+		vector<string> ntupledirs = it->second;
 		std::vector<string> files;
 		for(auto ntupledir : ntupledirs){
 			std::vector<std::string> thesefiles = getEOSFiles(path+ntupledir);
@@ -181,10 +180,7 @@ int main(){
 		}
 		cout << "Looping over " << files.size() << " files" << endl;
 		for (const auto& file : files) {
-		
-		    std::string xrootdFile =
-		        "root://cmseos.fnal.gov/" + file;
-		
+			std::string xrootdFile = "root://cmseos.fnal.gov/" + file;		
 		    //std::cout << "Adding: " << xrootdFile << std::endl;
 		
 		    chain->Add(xrootdFile.c_str());
@@ -193,15 +189,10 @@ int main(){
 		std::cout << "Total files: "
 		          << files.size()
 		          << std::endl;
-		string teff_name = makeTEffName(year, trigger, htbin);			
-		TEfficiency* eff = makeTriggerEfficiency(chain,trigger,htbin,teff_name);
-		cout << "Passed:   " << eff->GetPassedHistogram()->GetEntries() << endl;
-cout << "Total:    " << eff->GetTotalHistogram()->GetEntries() << endl;
-		if(eff->GetTotalHistogram()->GetEntries() == 0) cout << "Empty eff " << teff_name << endl;
-		if(eff == nullptr) continue;
-		effcurves.push_back(eff);
-		break; //debug
+		makeTriggerEfficiency(chain,triggers,preseltriggers,htbins,year,effcurves);
+		break; //2018 only while 2024 lepton triggers are sorted out
 	}
+	
     	string fout = "triggerEfficiency.root";
     	TFile* output = TFile::Open(fout.c_str(), "RECREATE");
     	if (!output || output->IsZombie()) {
