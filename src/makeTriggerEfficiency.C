@@ -66,7 +66,7 @@ std::vector<std::string> getEOSFiles(const std::string& eosPath)
 
 const int NBINS = 30;
 const double MET_MIN = 0.0;
-const double MET_MAX = 300.;
+const double MET_MAX = 500.;
 
 string makeTriggerCutstring(const vector<string>& trigs){
 	string trigsel;
@@ -117,7 +117,9 @@ void makeTriggerEfficiency(TChain* chain, const vector<string>& triggers, const 
 
 	map<string,pair<ROOT::RDF::RResultPtr<TH1D>, ROOT::RDF::RResultPtr<TH1D>>> dfhists;
 	for(auto htbin : htbins){
-		string htcutstring = makeHTBinCutstring(htbin); 
+		string htcutstring = makeHTBinCutstring(htbin);
+		if(htcutstring == "")
+			htcutstring = "(true)";
 		auto df_htbin = df0.Filter(htcutstring);
 		//total hist (denom)
 		TH1D htotal_model("hTotal","PFMETOR_Efficiency;MET [GeV];Efficiency",NBINS,MET_MIN,MET_MAX);
@@ -166,7 +168,7 @@ int main(){
 	    "/store/user/lpcsusylep/jaking/KUCMSNtuple/";
 	vector<string> preseltriggers = {"HLT_Ele35_WPTight_Gsf_v9","HLT_Photon20_v","HLT_Mu55_v3","HLT_Mu12_v3","HLT_IsoMu27_v16","HLT_IsoMu20_v15","HLT_Ele27_WPTight_Gsf_v16"};
 	vector<string> triggers = {"HLT_PFMET120_PFMHT120_IDTight_v","HLT_PFMET120_PFMHT120_IDTight_PFHT60_v","HLT_PFMETNoMu120_PFMHTNoMu120_IDTight_v","HLT_PFMETNoMu120_PFMHTNoMu120_IDTight_PFHT60_v"};
-	vector<string> htbins = {"_500","500_700","700_1000","1000_"};
+	vector<string> htbins = {"_500","500_700","700_1000","1000_","_"};
 	vector<TEfficiency*> effcurves;
 	for(auto it = filedirs.begin(); it != filedirs.end(); it++){
 		string year = it->first;
