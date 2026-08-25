@@ -1,0 +1,5 @@
+ROOTFileName,TEfficiencyName
+triggerEfficiency.root,PFMETOR_Efficiency_18_HTBin1000_
+triggerEfficiency.root,PFMETOR_Efficiency_18_HTBin500_700
+triggerEfficiency.root,PFMETOR_Efficiency_18_HTBin700_1000
+triggerEfficiency.root,PFMETOR_Efficiency_18_HTBin_500
