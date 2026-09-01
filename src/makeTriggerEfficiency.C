@@ -64,9 +64,6 @@ std::vector<std::string> getEOSFiles(const std::string& eosPath)
 // Configuration
 // ------------------------------------------------------------
 
-const int NBINS = 30;
-const double MET_MIN = 0.0;
-const double MET_MAX = 500.;
 
 string makeTriggerCutstring(const vector<string>& trigs){
 	string trigsel;
@@ -99,12 +96,12 @@ string makeHTBinCutstring(const string& htbin){
     return "";
 }
 
-void makeTriggerEfficiency(TChain* chain, const vector<string>& triggers, const vector<string>& preseltriggers, vector<string> htbins, string year, vector<TEfficiency*>& effs)
+const int NBINS = 30;
+const double MET_MIN = 0.0;
+const double MET_MAX = 600.;
+
+void makeTriggerEfficiency(string skimfile, const vector<string>& triggers, const vector<string>& preseltriggers, vector<string> htbins, string year, vector<TEfficiency*>& effs)
 {
-	if (!chain) {
-	    std::cerr << "ERROR: Null TChain!" << std::endl;
-	    return;
-	}
 	//do rdataframe hists for tefficiency - add ht binning here!
 	string trigsel = makeTriggerCutstring(triggers);
 	string trigpresel = makeTriggerCutstring(preseltriggers);
@@ -112,8 +109,8 @@ void makeTriggerEfficiency(TChain* chain, const vector<string>& triggers, const 
 	string evtfilters = "((Flag_BadChargedCandidateFilter) && (Flag_BadPFMuonFilter) && (Flag_EcalDeadCellTriggerPrimitiveFilter) && (Flag_HBHENoiseFilter) && (Flag_HBHENoiseIsoFilter) && (Flag_ecalBadCalibFilter) && (Flag_eeBadScFilter) && (Flag_goodVertices))";//"(Flag_MetFilters == 1)"; //need pts cut when running over skims
 
 
-	ROOT::RDataFrame df(*chain);
-	auto df0 = df.Define("ht","ROOT::VecOps::Sum(Jet_pt)");
+	ROOT::RDataFrame df("kuSkimTree",skimfile);
+	auto df0 = df.Define("ht","ROOT::VecOps::Sum(selJetPt)");
 
 	map<string,pair<ROOT::RDF::RResultPtr<TH1D>, ROOT::RDF::RResultPtr<TH1D>>> dfhists;
 	for(auto htbin : htbins){
@@ -125,14 +122,17 @@ void makeTriggerEfficiency(TChain* chain, const vector<string>& triggers, const 
 		TH1D htotal_model("hTotal","PFMETOR_Efficiency;MET [GeV];Efficiency",NBINS,MET_MIN,MET_MAX);
 		TH1D hpass_model("hPass","PFMETOR_Efficiency;MET [GeV];Efficiency",NBINS,MET_MIN,MET_MAX);
 		string presel = trigpresel+" && "+evtfilters + " && "+htcutstring; //in addition to ntuple "filter" of (>= 1 SV || >= 1 photon[pt > 30]) && MET > 100
-		
-		auto hTotal = df0.Filter(presel).Histo1D(htotal_model,"Met_CPt");	
+	
+		presel += " && ((nBaseLinePhotons > 0) || ((SV_nLeptonic > 0) || (SV_nHadronic > 0)))";
+	
+		auto hTotal = df0.Filter(presel).Histo1D(htotal_model,"selCMet");	
 		//pass hist (num)
-		auto hPass = df0.Filter(presel+" && "+trigsel).Histo1D(hpass_model,"Met_CPt");
+		auto hPass = df0.Filter(presel+" && "+trigsel).Histo1D(hpass_model,"selCMet");
 
 		dfhists[htbin] = std::make_pair(hTotal, hPass);
 	}
 	df0.Report()->Print();
+
 	for(auto it = dfhists.begin(); it != dfhists.end(); it++){
 		string htbin = it->first;
 		TEfficiency* eff = new TEfficiency(*(it->second.second),*(it->second.first));
@@ -159,40 +159,22 @@ string makeTEffName(string year, string trigger, string htbin){
 int main(){
 
 	//file dict
-	map<string, vector<string>> filedirs = {};
-	filedirs["18"] = {"kucmsntuple_EGamma_R18_SVHPM100_v51/EGamma/kucmsntuple_EGamma_R18_SVHPM100_v51_EGamma_MINIAOD_Run2018C-12Nov2019_UL2018-v2/"};
-	filedirs["24"] = {"kucmsntuple_EGamma_R24_SVHPM100_MiniAOD_v34/EGamma0/kucmsntuple_EGamma_R24_SVHPM100_MiniAOD_v34_EGamma0_MINIAOD_Run2024C-MINIv6NANOv15-v1/"};
+	map<string, string> filedirs = {};
+	filedirs["18"] = "EGamma_Run2018C-12Nov2019_UL2018-v2__SVHPM100_v34__rjrskim_v51.root";
+	filedirs["24"] = "EGamma0_Run2024C-MINIv6NANOv15-v1__SVHPM100_v34__rjrskim_v51.root";
 	
 
 	std::string path =
-	    "/store/user/lpcsusylep/jaking/KUCMSNtuple/";
-	vector<string> preseltriggers = {"HLT_Ele35_WPTight_Gsf_v9","HLT_Photon20_v","HLT_Mu55_v3","HLT_Mu12_v3","HLT_IsoMu27_v16","HLT_IsoMu20_v15","HLT_Ele27_WPTight_Gsf_v16"};
-	vector<string> triggers = {"HLT_PFMET120_PFMHT120_IDTight_v","HLT_PFMET120_PFMHT120_IDTight_PFHT60_v","HLT_PFMETNoMu120_PFMHTNoMu120_IDTight_v","HLT_PFMETNoMu120_PFMHTNoMu120_IDTight_PFHT60_v"};
+	    "root://cmseos.fnal.gov//store/group/lpcsusylep/malazaro/KUCMSSkims/skims_v51/";
+	vector<string> preseltriggers = {"Trigger_Ele35_WPTight_Gsf","Trigger_Mu55","Trigger_Mu12","Trigger_IsoMu27","Trigger_IsoMu20","Trigger_Ele27_WPTight_Gsf"};
+	vector<string> triggers = {"Trigger_PFMET120_PFMHT120_IDTight","Trigger_PFMET120_PFMHT120_IDTight_PFHT60","Trigger_PFMETNoMu120_PFMHTNoMu120_IDTight","Trigger_PFMETNoMu120_PFMHTNoMu120_IDTight_PFHT60"};
 	vector<string> htbins = {"_500","500_700","700_1000","1000_","_"};
 	vector<TEfficiency*> effcurves;
 	for(auto it = filedirs.begin(); it != filedirs.end(); it++){
 		string year = it->first;
 		cout << "Doing year " << year << endl;
-		TChain* chain = new TChain("tree/llpgtree");
-		vector<string> ntupledirs = it->second;
-		std::vector<string> files;
-		for(auto ntupledir : ntupledirs){
-			std::vector<std::string> thesefiles = getEOSFiles(path+ntupledir);
-			files.insert(files.end(), thesefiles.begin(), thesefiles.end());
-		}
-		cout << "Looping over " << files.size() << " files" << endl;
-		for (const auto& file : files) {
-			std::string xrootdFile = "root://cmseos.fnal.gov/" + file;		
-		    //std::cout << "Adding: " << xrootdFile << std::endl;
-		
-		    chain->Add(xrootdFile.c_str());
-		}
-			
-		std::cout << "Total files: "
-		          << files.size()
-		          << std::endl;
-		makeTriggerEfficiency(chain,triggers,preseltriggers,htbins,year,effcurves);
-		break; //2018 only while 2024 lepton triggers are sorted out
+		string skimfile = path+it->second;	
+		makeTriggerEfficiency(skimfile,triggers,preseltriggers,htbins,year,effcurves);
 	}
 	
     	string fout = "triggerEfficiency.root";
